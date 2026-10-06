@@ -1,19 +1,20 @@
+// SPDX-License-Identifier: MIT
 /**
  * @file ftp_console.c
  * @author A Xian (axian0417@gmail.com)
  *
- * @brief FTP console implementation
- *
- * @version 1.0
- * @date 2026-02-22
+ * @brief Command line front end for the FTP client.
+ * @details Maps text commands (open, user, pass, ls, cd, pwd, mkdir, rmdir, delete, rename,
+ *          get, put, abort, status, cstatus, bye) to the FTP client API on one static
+ *          client instance and prints the results through the print function given to
+ *          ftp_console_init() (vprintf if NULL). ftp_console() takes main() arguments,
+ *          so a shell can register it directly. Commands return at once; ftp_process()
+ *          executes them.
  *
  * @copyright Copyright (c) 2026 A Xian
  *
- * @license MIT
- *          https://opensource.org/licenses/MIT
- *
  */
- 
+
 #include "ftp_console.h"
 #include "ftp_client.h"
 #include "string.h"
@@ -24,6 +25,7 @@
 static ftp_client_t client;
 static ftp_client_t* p_client = &client;
 static ftp_console_print_t print_function = NULL;
+static bool inited;
 
 typedef struct 
 {
@@ -62,16 +64,23 @@ static bool is_number(const char* str)
  */
 static void console_print(const char* fmt, ...)
 {
+    va_list ap;
+
+    va_start(ap, fmt);
+
     if (print_function)
     {
         char buf[256];
 
-        va_list ap;
-        va_start(ap, fmt);
         vsnprintf(buf, sizeof(buf), fmt, ap);
         print_function("%s", buf);
-        va_end(ap);
     }
+    else
+    {
+        vprintf(fmt, ap);
+    }
+
+    va_end(ap);
 }
 
 /**
@@ -101,7 +110,7 @@ static void callback(ftp_client_t* client, ftp_events_t event, void* data, size_
         {
             if (client->mode == FTP_MODE_LISTING)
             {
-                if(data) { console_print("%s\r\n", (char*)data); }
+                if(data) { console_print("%.*s\r\n", (int)len, (char*)data); }
             }
             break;
         }
@@ -135,6 +144,7 @@ static void cmd_help(int argc, char** argv)
     console_print("  rename <from> <to>             - Rename or move file/directory\r\n");
     console_print("  get <remote file> [local file] - Download file\r\n");
     console_print("  put <local file> [remote file] - Upload file\r\n");
+    console_print("  abort                          - Abort the transfer in progress\r\n");
     console_print("  status                         - Show server status\r\n");
     console_print("  cstatus                        - Show client status\r\n");
 }
@@ -455,6 +465,22 @@ static void cmd_put(int argc, char** argv)
 }
 
 /**
+ * @brief Command: abort
+ *
+ * @param argc Number of arguments
+ * @param argv Array of arguments
+ */
+static void cmd_abort(int argc, char** argv)
+{
+    (void)argc;
+
+    if (!ftp_abort(p_client))
+    {
+        cmd_error(argv[0]);
+    }
+}
+
+/**
  * @brief Command: status
  * 
  * @param argc Number of arguments
@@ -515,6 +541,7 @@ static const cmd_entry_t cmd_table[] =
     {"rename", cmd_rename},
     {"get", cmd_get},
     {"put", cmd_put},
+    {"abort", cmd_abort},
     {"status", cmd_status},
     {"cstatus", cmd_cstatus},
     {NULL, NULL}
@@ -525,45 +552,54 @@ static const cmd_entry_t cmd_table[] =
 /**
  * @brief Initialize the FTP console
  * 
- * @param out Output callback function
+ * @param func Output function, NULL for vprintf (stdout)
  */
 void ftp_console_init(ftp_console_print_t func)
 {
     print_function = func;
-    ftp_client_register(p_client, "ConsoleFTP", NULL, callback);
+    /* Console commands run in the console task, not in the ftp_process() loop: default resolver */
+    ftp_client_register(p_client, "ConsoleFTP", NULL, callback, NULL);
+    inited = true;
 }
 
 /**
- * @brief Process command arguments
+ * @brief Run one console command
  * 
- * @param argc Number of arguments (including command)
- * @param argv Argument array
+ * @param argc Number of arguments, including the command name
+ * @param argv Arguments as main(): argv[0] is the command name (e.g. "ftp"),
+ *             argv[1] the console command
+ * 
+ * @return 0 on success, 1 if the command is unknown or the console is not initialized
  */
-void ftp_console(int argc, char** argv)
+int ftp_console(int argc, char** argv)
 {
-    if (!p_client) 
+    if (!inited)
     {
-        return;
+        console_print("ftp_console_init() missing\r\n");
+        return 1;
     }
 
-    if (argc < 1 || !argv[0]) 
+    /* No console command: help */
+    if ((argc < 2) || (argv[1] == NULL))
     {
-        cmd_help(argc, argv);
-        return;
+        cmd_help(0, NULL);
+        return 0;
     }
 
-    const char* cmd = argv[0];
+    const char* cmd = argv[1];
     const cmd_entry_t* entry = cmd_table;
     
     while (entry->name)
     {
         if (strcmp(entry->name, cmd) == 0)
         {
-            entry->handler(argc, argv);
-            return;
+            /* Handlers see the console command as argv[0] */
+            entry->handler(argc - 1, argv + 1);
+            return 0;
         }
         entry++;
     }
 
     console_print("Unknown command: %s (Try 'help')\r\n", cmd);
+    return 1;
 }

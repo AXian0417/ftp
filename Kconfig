@@ -1,0 +1,199 @@
+menu "FTP"
+
+# ==========================================
+# 1. Code Generation Settings (gen_config.py only)
+# ==========================================
+menu "Code Generation Settings"
+    # IDF_CMAKE is a bool that is always y in ESP-IDF and undefined (n) elsewhere.
+    # IDF_TARGET cannot be used: a string symbol is always n in a bool expression.
+    visible if !IDF_CMAKE
+
+config FTP_CONFIG_HEADER_DIR
+    string "Config Header Output Directory"
+    depends on !IDF_CMAKE
+    default "."
+    help
+      Specify the directory where 'ftp_config.h' will be generated.
+      Use '.' for the current directory (project root), or specify
+      a path such as 'Core/Inc'.
+      Hidden when the build system provides the configuration header itself.
+
+endmenu
+
+# ==========================================
+# 2. Server Configuration
+# ==========================================
+menu "Server Configuration"
+
+config FTP_CLIENTS_MAX
+    int "Max Number of Clients"
+    default 3
+    range 1 16
+    help
+      Maximum number of concurrent client connections of the FTP server.
+      Each client needs 2 * FTP_FILE_PATH_LEN + FTP_DATA_BUFFER_SIZE
+      + FTP_CMD_BUFFER_SIZE bytes of buffers (see FTP_STATIC_BUFFERS).
+
+config FTP_CMD_PORT
+    int "Command Port"
+    default 21
+    range 1 65535
+    help
+      TCP port of the FTP command connection. Also the default port of the client.
+
+config FTP_PASSIVE_DATA_PORT
+    int "Passive Data Port (first)"
+    default 2024
+    range 1 65535
+    help
+      First TCP port for passive mode (PASV) data connections.
+      Client n of the server uses FTP_PASSIVE_DATA_PORT + n.
+
+config FTP_LIST_NUM
+    int "Directory Entries per Listing Chunk"
+    default 64
+    range 1 255
+    help
+      Maximum number of directory entries formatted into one listing chunk.
+
+config FTP_MFMT
+    bool "MFMT (set the modification time of a file)"
+    default n
+    help
+      Uses utime() of the POSIX file API. A platform without utime() fails at link
+      time; disable this option there (MFMT then replies 502 and FEAT omits it).
+
+config FTP_MAX_USER_LEN
+    int "Max User Name Length (Bytes, with the terminator)"
+    default 32
+    range 8 64
+    help
+      Size of a user name buffer, server roles and client connections.
+      The server keeps 4 roles x (user + password) in RAM.
+
+config FTP_MAX_PASS_LEN
+    int "Max Password Length (Bytes, with the terminator)"
+    default 64
+    range 8 128
+    help
+      Size of a password buffer, server roles and client connections.
+      The default passwords below must fit (checked at compile time). Longer
+      names or passwords are refused by the API, never truncated.
+
+config FTP_USER_DEFAULT_PASSWORD
+    string "Default Password of Role 'user'"
+    default "1234"
+
+config FTP_MAINT_DEFAULT_PASSWORD
+    string "Default Password of Role 'maint'"
+    default "1234"
+
+config FTP_ADMIN_DEFAULT_PASSWORD
+    string "Default Password of Role 'admin'"
+    default "1234"
+
+endmenu
+
+# ==========================================
+# 3. Buffers and Timeouts (server and client)
+# ==========================================
+menu "Buffers and Timeouts"
+
+config FTP_FILE_PATH_LEN
+    int "File Path Length (Bytes)"
+    default 128
+    range 32 1024
+    help
+      Maximum length of a file path including the mount point.
+
+config FTP_CMD_BUFFER_SIZE
+    int "Command Buffer Size (Bytes)"
+    default 256
+    range 64 2048
+    help
+      Size of the command and reply buffers.
+
+config FTP_DATA_BUFFER_SIZE
+    int "Data Buffer Size (Bytes)"
+    default 1024
+    range 256 16384
+    help
+      Size of the data transfer buffer.
+
+config FTP_STATIC_BUFFERS
+    bool "Static Server Client Buffers (no malloc)"
+    default n
+    help
+      n: the buffers of a server client are allocated from the heap when it
+         connects and freed when it disconnects (RAM used only while connected).
+      y: the buffers of all FTP_CLIENTS_MAX clients are static (.bss), the
+         server never calls malloc (RAM always used, size known at link time).
+
+config FTP_CMD_TIMEOUT_MS
+    int "Command Timeout (ms)"
+    default 180000
+    help
+      Idle time after which a command connection (server) or an operation (client) times out.
+
+config FTP_DATA_TIMEOUT_MS
+    int "Data Timeout (ms)"
+    default 30000
+    help
+      Time without progress after which a data connection times out.
+      Recommend at least 30 seconds.
+
+endmenu
+
+# ==========================================
+# 4. Log Configuration
+# ==========================================
+menu "Log Configuration"
+
+choice FTP_LOG_LEVEL_CHOICE
+    prompt "Log Level"
+    default FTP_LOG_LEVEL_INFO
+    help
+      Logs below this level are removed at compile time (no code, arguments not evaluated).
+      E: the server cannot work (mount point, start failure)
+      W: service lost (connection refused, file error, transfer failed, traversal attempt)
+      I: lifecycle (start/stop, connect, login result, disconnect reason, transfer done)
+      D: one line per command (command, reply code, path, result)
+      V: traces (every reply, listing entries, transfer progress, server replies on the client)
+
+    config FTP_LOG_LEVEL_NONE
+        bool "None"
+    config FTP_LOG_LEVEL_ERROR
+        bool "Error"
+    config FTP_LOG_LEVEL_WARN
+        bool "Warning"
+    config FTP_LOG_LEVEL_INFO
+        bool "Info"
+    config FTP_LOG_LEVEL_DEBUG
+        bool "Debug"
+    config FTP_LOG_LEVEL_VERBOSE
+        bool "Verbose"
+endchoice
+
+config FTP_LOG_LEVEL
+    int
+    default 0 if FTP_LOG_LEVEL_NONE
+    default 1 if FTP_LOG_LEVEL_ERROR
+    default 2 if FTP_LOG_LEVEL_WARN
+    default 3 if FTP_LOG_LEVEL_INFO
+    default 4 if FTP_LOG_LEVEL_DEBUG
+    default 5 if FTP_LOG_LEVEL_VERBOSE
+
+config FTP_LOG_CUSTOM_IMPL
+    bool "Use Custom Log Implementation"
+    depends on !FTP_LOG_LEVEL_NONE
+    default n
+    help
+      If enabled, the application must provide
+      'void ftp_log_output(ftp_log_level_t level, const char* tag, const char* fmt, ...)'
+      (fmt has no line ending; the implementation adds level, time and newline).
+      If disabled, printf is used: "I (5012) ftp: message", the time is the
+      milliseconds counted from the pulse_1ms of ftp_server() / ftp_process().
+
+endmenu
+
+endmenu
